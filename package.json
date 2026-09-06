@@ -1,0 +1,46 @@
+{
+  "name": "mfcloud-personal",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
+    "format:check": "prettier --check src test package.json wrangler.jsonc"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
+    "@aws-sdk/s3-request-presigner": "^3.0.0",
+    "@aws-sdk/xml-builder": "3.972.40",
+    "@smithy/fetch-http-handler": "^5.8.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260903.1",
+    "prettier": "3.6.2",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11",
+    "wrangler": "4.128.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "R2_ACCOUNT_ID": {
+        "description": "Your Cloudflare Account ID, shown in the R2 overview."
+      },
+      "R2_BUCKET_NAME": {
+        "description": "Must exactly match the name of the BUCKET R2 binding, including any name you customize during setup."
+      },
+      "R2_ACCESS_KEY_ID": {
+        "description": "Create an R2 object read/write API token restricted to this bucket."
+      },
+      "R2_SECRET_ACCESS_KEY": {
+        "description": "Secret Access Key for that bucket-scoped R2 API token. This stays on the Worker."
+      },
+      "OWNER_TOKEN": {
+        "description": "Generate at least 32 random bytes, e.g. openssl rand -hex 32. Enter this connection token in MFinder."
+      }
+    }
+  }
+}

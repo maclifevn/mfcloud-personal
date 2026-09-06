@@ -1,0 +1,5 @@
+# Bucket-scoped R2 S3 credentials; these stay on the Worker.
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+# Generate at least 32 random bytes. This is the only credential entered in MFinder.
+OWNER_TOKEN=

@@ -1,0 +1,49 @@
+// Personal deployment template used by Deploy to Cloudflare.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mfcloud-personal",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  // Workers has no DOMParser. Keep the server XML parser when bundling the SDK.
+  "alias": { "@aws-sdk/xml-builder": "@aws-sdk/xml-builder/dist-cjs/index.js" },
+  "vars": {
+    "MODE": "personal",
+    "PUBLIC_ORIGIN": "",
+    "UPLOADS_ENABLED": "true",
+    "QUOTA_BYTES": "10000000000",
+    "MAX_FILE_BYTES": "500000000",
+    "R2_ACCOUNT_ID": "SET_YOUR_CLOUDFLARE_ACCOUNT_ID",
+    "R2_BUCKET_NAME": "mfcloud-personal",
+  },
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "mfcloud-personal",
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mfcloud-personal",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "triggers": {
+    "crons": ["*/5 * * * *"],
+  },
+  "preview_urls": false,
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": false,
+    },
+    "traces": {
+      "enabled": false,
+    },
+  },
+  "secrets": {
+    "required": ["R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "OWNER_TOKEN"],
+  },
+}
