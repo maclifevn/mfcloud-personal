@@ -110,6 +110,23 @@ export const b64url = (data: Uint8Array) =>
     .replaceAll("/", "_")
     .replaceAll("=", "");
 export const token = () => b64url(crypto.getRandomValues(new Uint8Array(16)));
+// Public links use six case-sensitive base62 characters. Internal IDs above
+// retain their original entropy. Rejection sampling avoids modulo bias.
+export function shareToken(): string {
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (;;) {
+    let value = "";
+    while (value.length < 6) {
+      for (const byte of crypto.getRandomValues(new Uint8Array(12))) {
+        if (byte < 248) value += alphabet[byte % 62];
+        if (value.length === 6) break;
+      }
+    }
+    // This public route is already used by the health endpoint.
+    if (value !== "health") return value;
+  }
+}
 export async function hash(value: string) {
   return b64url(
     new Uint8Array(

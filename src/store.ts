@@ -1,4 +1,4 @@
-import { hash, HTTPError, integer, text, token } from "./http";
+import { hash, HTTPError, integer, text, shareToken } from "./http";
 import {
   limits,
   now,
@@ -146,57 +146,70 @@ export async function createUpload(
   }
   await ensureAccount(env, principal.accountId);
   await rateLimit(env, `create:${principal.accountId}`, 60, 3600);
-  const id = crypto.randomUUID(),
-    timestamp = now();
-  const statements = [
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO shares
-  (id,account_id,request_key,manifest_hash,token,bytes,file_count,ttl,source,created_at,session_expires_at)
-  SELECT ?3,?1,?4,?5,?6,?7,?8,?9,?10,?2,?11 FROM accounts
-  WHERE id=?1 AND status='active'
-  AND ?7 + (SELECT COALESCE(SUM(bytes),0) FROM shares WHERE account_id=?1 AND ${charged}) <= quota_bytes
-  AND ?8 + (SELECT COALESCE(SUM(file_count),0) FROM shares WHERE account_id=?1 AND ${charged}) <= 200
-  AND (SELECT COUNT(*) FROM shares WHERE account_id=?1 AND status='uploading' AND session_expires_at>?2) < 2`,
-    ).bind(
-      principal.accountId,
-      timestamp,
-      id,
-      requestKey,
-      digest,
-      token(),
-      bytes,
-      files.length,
-      ttl,
-      source,
-      timestamp + 86400,
-    ),
-  ];
-  for (const [position, file] of files.entries()) {
-    const fileId = crypto.randomUUID();
-    statements.push(
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const id = crypto.randomUUID(),
+      timestamp = now(),
+      candidate = shareToken();
+    const statements = [
       env.DB.prepare(
-        `INSERT INTO files(id,share_id,position,name,bytes,object_key)
-   SELECT ?1,id,?3,?4,?5,?6 FROM shares WHERE id=?2`,
+        `INSERT OR IGNORE INTO shares
+    (id,account_id,request_key,manifest_hash,token,bytes,file_count,ttl,source,created_at,session_expires_at)
+    SELECT ?3,?1,?4,?5,?6,?7,?8,?9,?10,?2,?11 FROM accounts
+    WHERE id=?1 AND status='active'
+    AND ?7 + (SELECT COALESCE(SUM(bytes),0) FROM shares WHERE account_id=?1 AND ${charged}) <= quota_bytes
+    AND ?8 + (SELECT COALESCE(SUM(file_count),0) FROM shares WHERE account_id=?1 AND ${charged}) <= 200
+    AND (SELECT COUNT(*) FROM shares WHERE account_id=?1 AND status='uploading' AND session_expires_at>?2) < 2`,
       ).bind(
-        fileId,
+        principal.accountId,
+        timestamp,
         id,
-        position,
-        file.name,
-        file.bytes,
-        `objects/${id}/${fileId}`,
+        requestKey,
+        digest,
+        candidate,
+        bytes,
+        files.length,
+        ttl,
+        source,
+        timestamp + 86400,
       ),
-    );
+    ];
+    for (const [position, file] of files.entries()) {
+      const fileId = crypto.randomUUID();
+      statements.push(
+        env.DB.prepare(
+          `INSERT INTO files(id,share_id,position,name,bytes,object_key)
+     SELECT ?1,id,?3,?4,?5,?6 FROM shares WHERE id=?2`,
+        ).bind(
+          fileId,
+          id,
+          position,
+          file.name,
+          file.bytes,
+          `objects/${id}/${fileId}`,
+        ),
+      );
+    }
+    await env.DB.batch(statements);
+    const share = await env.DB.prepare(
+      "SELECT * FROM shares WHERE account_id=?1 AND request_key=?2",
+    )
+      .bind(principal.accountId, requestKey)
+      .first<Share>();
+    if (share) {
+      if (share.manifest_hash !== digest)
+        throw new HTTPError(409, "idempotency_conflict");
+      return envelope(env, share);
+    }
+    // INSERT OR IGNORE may lose either the atomic quota check or the unique
+    // token race. Retry only collisions; tombstones prevent ever reusing a link.
+    const collision = await env.DB.prepare(
+      "SELECT id FROM shares WHERE token=?1",
+    )
+      .bind(candidate)
+      .first();
+    if (!collision) throw new HTTPError(409, "quota_or_session_limit");
   }
-  await env.DB.batch(statements);
-  const share = await env.DB.prepare(
-    "SELECT * FROM shares WHERE account_id=?1 AND request_key=?2",
-  )
-    .bind(principal.accountId, requestKey)
-    .first<Share>();
-  if (!share) throw new HTTPError(409, "quota_or_session_limit");
-  if (share.manifest_hash !== digest)
-    throw new HTTPError(409, "idempotency_conflict");
-  return envelope(env, share);
+  throw new HTTPError(503, "share_token_unavailable");
 }
 export async function deleteShare(env: Env, share: Share) {
   // Keep tombstones and repeatedly delete for 20 minutes: an in-flight R2 completion

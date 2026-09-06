@@ -10,7 +10,7 @@ import {
 } from "../src/store";
 import { cleanup } from "../src/cleanup";
 import { authenticate, checkUploadAccess } from "../src/auth";
-import { b64url } from "../src/http";
+import { b64url, shareToken, token } from "../src/http";
 import { signParts } from "../src/storage";
 import worker from "../src/index";
 export function database(sqlite) {
@@ -85,13 +85,16 @@ describe("MFCloud quota and publication", () => {
       R2_SECRET_ACCESS_KEY: "fixture",
     };
   });
-  afterEach(() => sqlite.close());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    sqlite.close();
+  });
   it("limits token guessing per IP without creating a counter for each token", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_788_670_000_000);
     const logging = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       for (let index = 0; index < 241; index++) {
-        const token = index.toString(36).padStart(22, "a");
+        const token = index.toString(36).padStart(6, "a");
         const response = await worker.fetch(
           new Request(`${env.PUBLIC_ORIGIN}/${token}`, {
             headers: { "cf-connecting-ip": "192.0.2.10" },
@@ -105,7 +108,7 @@ describe("MFCloud quota and publication", () => {
         sqlite.prepare("SELECT COUNT(*) AS n FROM rate_limits").get().n,
       ).toBe(1);
       const otherIP = await worker.fetch(
-        new Request(`${env.PUBLIC_ORIGIN}/${"b".repeat(22)}`, {
+        new Request(`${env.PUBLIC_ORIGIN}/${"b".repeat(6)}`, {
           headers: { "cf-connecting-ip": "192.0.2.11" },
         }),
         env,
@@ -116,6 +119,151 @@ describe("MFCloud quota and publication", () => {
       logging.mockRestore();
       clock.mockRestore();
     }
+  });
+  it("uses unbiased six-character codes, excludes reserved routes and retains long internal IDs", () => {
+    const rng = vi
+      .spyOn(crypto, "getRandomValues")
+      .mockImplementationOnce((bytes) => {
+        bytes.set([255, 248, 0, 61, 62, 123, 124, 185]);
+        return bytes;
+      });
+    expect(shareToken()).toBe("A9A9A9");
+    rng
+      .mockImplementationOnce((bytes) => {
+        bytes.set([33, 30, 26, 37, 45, 33]);
+        return bytes;
+      })
+      .mockImplementationOnce((bytes) => bytes.fill(1));
+    expect(shareToken()).toBe("BBBBBB");
+    rng.mockRestore();
+    expect(token()).toMatch(/^[A-Za-z0-9_-]{22}$/);
+  });
+  it("retries collisions with deleted links without reusing codes or reserving quota twice", async () => {
+    const first = await createUpload(env, principal, request());
+    sqlite
+      .prepare("UPDATE shares SET token='AAAAAA',status='deleted' WHERE id=?")
+      .run(first.id);
+    const rng = vi
+      .spyOn(crypto, "getRandomValues")
+      .mockImplementationOnce((bytes) => bytes.fill(0))
+      .mockImplementationOnce((bytes) => bytes.fill(1));
+    const second = await createUpload(
+      env,
+      principal,
+      request("request_00000000002"),
+    );
+    expect(rng).toHaveBeenCalledTimes(2);
+    expect((await getShare(env, second.id, "owner")).token).toBe("BBBBBB");
+    expect((await getShare(env, first.id, "owner")).token).toBe("AAAAAA");
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM files").get().n).toBe(2);
+    expect((await accountUsage(env, "owner")).reservedBytes).toBe(400_000_000);
+    expect(
+      (await createUpload(env, principal, request("request_00000000002"))).id,
+    ).toBe(second.id);
+  });
+  it("bounds repeated collisions and leaves no orphan rows or reservations", async () => {
+    const first = await createUpload(env, principal, request());
+    sqlite.prepare("UPDATE shares SET token='AAAAAA' WHERE id=?").run(first.id);
+    const rng = vi
+      .spyOn(crypto, "getRandomValues")
+      .mockImplementation((bytes) => bytes.fill(0));
+    await expect(
+      createUpload(env, principal, request("request_00000000002")),
+    ).rejects.toMatchObject({ status: 503, code: "share_token_unavailable" });
+    expect(rng).toHaveBeenCalledTimes(8);
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM shares").get().n).toBe(1);
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM files").get().n).toBe(1);
+    expect((await accountUsage(env, "owner")).reservedBytes).toBe(400_000_000);
+  });
+  it("preserves idempotency when concurrent creations choose the same short code", async () => {
+    vi.spyOn(crypto, "getRandomValues").mockImplementation((bytes) =>
+      bytes.fill(0),
+    );
+    const [a, b] = await Promise.all([
+      createUpload(env, principal, request()),
+      createUpload(env, principal, request()),
+    ]);
+    expect(a.id).toBe(b.id);
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM files").get().n).toBe(1);
+    expect((await accountUsage(env, "owner")).reservedBytes).toBe(400_000_000);
+  });
+  it.each(["Ab3xY9", "aaaaaa"])(
+    "serves, reports and revokes six-character public links: %s",
+    async (code) => {
+      const upload = await createUpload(env, principal, request(undefined, 3));
+      sqlite.prepare("UPDATE files SET status='ready'").run();
+      sqlite
+        .prepare("UPDATE shares SET token=? WHERE id=?")
+        .run(code, upload.id);
+      const published = await publish(
+        env,
+        await getShare(env, upload.id, "owner"),
+      );
+      expect(published.shareURL).toBe(`${env.PUBLIC_ORIGIN}/${code}`);
+      env.BUCKET = {
+        head: vi.fn(async () => ({ size: 3, httpEtag: '"fixture"' })),
+        get: vi.fn(async (_key, options) => ({
+          body: options?.range ? "b" : "abc",
+        })),
+      };
+      const logging = vi.spyOn(console, "log").mockImplementation(() => {});
+      const fetchPublic = (suffix = "", init = {}) =>
+        worker.fetch(new Request(published.shareURL + suffix, init), env, {});
+      const page = await fetchPublic();
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain(
+        `/${code}/files/${upload.files[0].id}`,
+      );
+      const filePath = `/files/${upload.files[0].id}`;
+      expect(await (await fetchPublic(filePath)).text()).toBe("abc");
+      const head = await fetchPublic(filePath, { method: "HEAD" });
+      expect(head.status).toBe(200);
+      expect(head.headers.get("content-length")).toBe("3");
+      const ranged = await fetchPublic(filePath, {
+        headers: { range: "bytes=1-1" },
+      });
+      expect(ranged.status).toBe(206);
+      expect(await ranged.text()).toBe("b");
+      expect((await fetchPublic("/report")).status).toBe(200);
+      expect(
+        (
+          await fetchPublic("/report", {
+            method: "POST",
+            headers: {
+              origin: env.PUBLIC_ORIGIN,
+              "content-type": "application/x-www-form-urlencoded",
+            },
+            body: "reason=Fixture+report",
+          })
+        ).status,
+      ).toBe(200);
+      await deleteShare(env, await getShare(env, upload.id, "owner"));
+      expect((await fetchPublic()).status).toBe(410);
+      expect(
+        (await fetchPublic(filePath, { headers: { range: "bytes=1-1" } }))
+          .status,
+      ).toBe(410);
+      logging.mockRestore();
+    },
+  );
+  it("rejects retired long-link routes even when their share remains in the database", async () => {
+    const upload = await createUpload(env, principal, request(undefined, 3));
+    const oldCode = "a_-" + "b".repeat(19);
+    sqlite.prepare("UPDATE files SET status='ready'").run();
+    sqlite
+      .prepare("UPDATE shares SET token=? WHERE id=?")
+      .run(oldCode, upload.id);
+    await publish(env, await getShare(env, upload.id, "owner"));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    for (const suffix of ["", "/report", `/files/${upload.files[0].id}`]) {
+      const response = await worker.fetch(
+        new Request(`${env.PUBLIC_ORIGIN}/${oldCode}${suffix}`),
+        env,
+        {},
+      );
+      expect(response.status).toBe(404);
+    }
+    expect((await getShare(env, upload.id, "owner")).status).toBe("ready");
   });
   it("creates multipart sessions through fetch in the Worker runtime", async () => {
     const transport = vi
@@ -170,7 +318,7 @@ describe("MFCloud quota and publication", () => {
     sqlite.prepare("UPDATE files SET status='ready'").run();
     const published = await publish(env, share);
     expect(published.shareURL).toMatch(
-      /^https:\/\/share.test\/[A-Za-z0-9_-]{22}$/,
+      /^https:\/\/share.test\/[A-Za-z0-9]{6}$/,
     );
     expect(published.expiresAt).toBeGreaterThan(
       Math.floor(Date.now() / 1000) + 604795,

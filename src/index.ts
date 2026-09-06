@@ -109,7 +109,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext) {
   if (path === "/api/v1/reports" && request.method === "POST")
     return report(request, env, await readJSON(request));
   const publicMatch = path.match(
-    /^\/([A-Za-z0-9_-]{22})(?:\/(files\/([a-f0-9-]{36})|report))?$/,
+    /^\/([A-Za-z0-9]{6})(?:\/(files\/([a-f0-9-]{36})|report))?$/,
   );
   if (publicMatch) {
     const shareToken = publicMatch[1]!;

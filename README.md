@@ -68,6 +68,15 @@ Default quota is 10 GB and maximum file size is 500 MB. Change `QUOTA_BYTES` and
 bytes; the protocol supports a maximum file size of 5 GB. Supported expiry times
 are 24 hours, 3 days, 7 days and 30 days.
 
+New shares use six case-sensitive letters and digits (`A–Z`, `a–z`, `0–9`).
+Pre-release 22-character links are no longer routed. Their data remains subject
+to expiry and authenticated deletion. Codes are
+cryptographically random, checked by a database uniqueness constraint and retried
+on collision; deleted codes are never reused. Six characters provide about 35.7
+bits of entropy, so these links are easier to guess than the previous 128-bit
+links. Per-IP throttling reduces guessing from one address but does not prevent
+distributed guessing. A link grants access to anyone who obtains it.
+
 ## Maintain your deployment
 
 - Back up the D1 database and keep R2/D1 bindings unchanged when updating code.
