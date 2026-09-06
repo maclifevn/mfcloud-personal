@@ -127,7 +127,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext) {
         return html(
           page(
             "Report abuse",
-            `<h1>Report abuse</h1><form method="post"><textarea name="reason" maxlength="2000" required aria-label="Reason"></textarea><p><button>Send report</button></p></form>`,
+            `<section class="report-card"><h1>Report abuse</h1><p>Tell us what is wrong with this share.</p><form method="post"><textarea name="reason" maxlength="2000" required aria-label="Reason"></textarea><p><button>Send report</button></p></form></section>`,
           ),
         );
       if (request.method === "POST") {
@@ -145,7 +145,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext) {
         return html(
           page(
             "Report received",
-            "<h1>Report received</h1><p>Thank you. Your report will be reviewed.</p>",
+            '<section class="report-card"><h1>Report received</h1><p>Thank you. Your report will be reviewed.</p></section>',
           ),
         );
       }
@@ -153,7 +153,11 @@ async function route(request: Request, env: Env, ctx: ExecutionContext) {
     if (!["GET", "HEAD"].includes(request.method))
       throw new HTTPError(405, "method_not_allowed");
     if (publicMatch[3]) return download(request, env, share, publicMatch[3]);
-    const response = await sharePage(env, share);
+    const response = await sharePage(
+      env,
+      share,
+      request.headers.get("accept-language") ?? "en",
+    );
     return request.method === "HEAD"
       ? new Response(null, {
           status: response.status,

@@ -77,6 +77,10 @@ bits of entropy, so these links are easier to guess than the previous 128-bit
 links. Per-IP throttling reduces guessing from one address but does not prevent
 distributed guessing. A link grants access to anyone who obtains it.
 
+The recipient page adapts to phone screens and the system light/dark appearance.
+It uses English or Vietnamese from the browser language, presents file types and
+UTC expiry clearly, and works without JavaScript or external fonts.
+
 ## Maintain your deployment
 
 - Back up the D1 database and keep R2/D1 bindings unchanged when updating code.

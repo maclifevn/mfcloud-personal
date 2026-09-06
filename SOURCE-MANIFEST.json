@@ -11,13 +11,15 @@
     "src/auth.ts": "142cf2a252a20215455b048698d4c0bda6cb91645fef1e277df65abe52cc15db",
     "src/cleanup.ts": "d76151586bdffdbcdf9ddec2a56c62d4b513a0d07c9a76a7419da6566bfa4ff8",
     "src/http.ts": "0dbe9e813623e7747230dd00ad764a12600c8a4f0281dd818047e99eca9e6868",
-    "src/index.ts": "14d7783ccc2d5d2573c33ffdc98ecd327991996f8f4cdf718c4c20b6b9eef017",
-    "src/public.ts": "78913a8312f84de230510272785ba628f3b2d7d482c77e7ae996d2146ca1afa9",
+    "src/index.ts": "b6730ceb74777d900d9bdeb911295b53b0824947b39d6bcdc23d83f69dae7e84",
+    "src/public.ts": "8b2485eedd783f286b356c8d30b63969c78d91a5b38ffe1d85e8f9773d813239",
+    "src/recipient.ts": "0839263533023b504e966ee8a3c9967093b45a344690b2bf8e41dd6baa6cd0b8",
     "src/storage.ts": "74ed6c5ee287a3c0b0f30027ac73424e74a08c4ff4dcbf7dd52462492df3d04f",
     "src/store.ts": "73273037994e1e647c680fbc4612b4d9bc81bede4b513da6cc57e0eb06221b5f",
     "src/types.ts": "c9e3678267f5f1d068ab40d7061ee00e385e5786625466ccb528e66d91ae0355",
     "migrations/0001_initial.sql": "3fbaad272deaa0d184eb5f12f5fee6d9aa47351550979cfbb12c0c96d729f617",
+    "test/recipient.test.js": "9662247220c972f9e5df37b24a0d82c9d48095f63ace72bac061333892dd9d72",
     "test/store.test.js": "9b8908330b926711538cda0a5dd72f6f93ee44e96f5badb9e83abca1c6766bbc",
-    "README.md": "7a00e7c928bbb7df901ca2bb0373b08a4676ba82bc077fcce855bdcb4cdee902"
+    "README.md": "c3c36a7bb107e83dd6d253468e18bf95f56d252d3b14846bf986582eaca52338"
   }
 }
