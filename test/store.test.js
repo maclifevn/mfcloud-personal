@@ -7,53 +7,14 @@ import {
   publish,
   deleteShare,
   getShare,
+  envelope,
 } from "../src/store";
 import { cleanup } from "../src/cleanup";
 import { authenticate, checkUploadAccess } from "../src/auth";
 import { b64url, shareToken, token } from "../src/http";
 import { signParts } from "../src/storage";
 import worker from "../src/index";
-export function database(sqlite) {
-  function prepare(sql, values = []) {
-    const args = Object.fromEntries(values.map((v, i) => [String(i + 1), v]));
-    const all = () => sqlite.prepare(sql).all(args);
-    const execute = () => {
-      const s = sqlite.prepare(sql);
-      const rows = s.columns().length ? s.all(args) : [];
-      const result = rows.length
-        ? { changes: sqlite.prepare("SELECT changes() AS n").get().n }
-        : s.columns().length
-          ? { changes: 0 }
-          : s.run(args);
-      return {
-        success: true,
-        results: rows,
-        meta: { changes: Number(result.changes) },
-      };
-    };
-    return {
-      bind: (...v) => prepare(sql, v),
-      first: async () => all()[0] ?? null,
-      all: async () => ({ results: all() }),
-      run: async () => execute(),
-      execute,
-    };
-  }
-  return {
-    prepare,
-    async batch(statements) {
-      sqlite.exec("BEGIN");
-      try {
-        const result = statements.map((s) => s.execute());
-        sqlite.exec("COMMIT");
-        return result;
-      } catch (e) {
-        sqlite.exec("ROLLBACK");
-        throw e;
-      }
-    },
-  };
-}
+import { database } from "./database.js";
 describe("MFCloud quota and publication", () => {
   let sqlite, env;
   const principal = { accountId: "owner" };
@@ -494,6 +455,77 @@ describe("MFCloud quota and publication", () => {
       .run(Math.floor(Date.now() / 1000) + 1000);
     await deleteShare(env, share);
     expect((await worker.fetch(new Request(url), env, ctx)).status).toBe(410);
+  });
+  it("hands out the link at creation and serves only finished files until publication", async () => {
+    const input = request(undefined, 6);
+    input.files.push({ name: "second.txt", bytes: 6 });
+    const upload = await createUpload(env, principal, input),
+      ctx = { waitUntil: () => {} };
+    expect(upload.shareURL).toBeNull();
+    expect(upload.linkURL).toMatch(/^https:\/\/share.test\/[A-Za-z0-9]{6}$/);
+    const capabilities = await (
+      await worker.fetch(
+        new Request("https://share.test/api/v1/capabilities"),
+        env,
+        ctx,
+      )
+    ).json();
+    expect(capabilities.earlyLinks).toBe(true);
+    env.BUCKET = {
+      head: async () => ({ size: 6, httpEtag: '"fixture"' }),
+      get: async () => ({ body: new TextEncoder().encode("abcdef") }),
+    };
+    let page = await worker.fetch(new Request(upload.linkURL), env, ctx);
+    expect(page.status).toBe(200);
+    let html = await page.text();
+    expect(html).toContain("still uploading");
+    expect(html).toContain("0 of 2 files ready");
+    const first = `${upload.linkURL}/files/${upload.files[0].id}`,
+      second = `${upload.linkURL}/files/${upload.files[1].id}`;
+    expect((await worker.fetch(new Request(first), env, ctx)).status).toBe(404);
+    sqlite
+      .prepare("UPDATE files SET status='ready' WHERE id=?")
+      .run(upload.files[0].id);
+    html = await (
+      await worker.fetch(new Request(upload.linkURL), env, ctx)
+    ).text();
+    expect(html).toContain("1 of 2 files ready");
+    expect((await worker.fetch(new Request(first), env, ctx)).status).toBe(200);
+    expect((await worker.fetch(new Request(second), env, ctx)).status).toBe(
+      404,
+    );
+    sqlite.prepare("UPDATE files SET status='ready'").run();
+    const share = await getShare(env, upload.id, "owner");
+    const published = await publish(env, share);
+    expect(published.shareURL).toBe(upload.linkURL);
+    expect(published.linkURL).toBe(upload.linkURL);
+    html = await (
+      await worker.fetch(new Request(upload.linkURL), env, ctx)
+    ).text();
+    expect(html).not.toContain("still uploading");
+  });
+  it("closes an early link when its upload is cancelled or its session expires", async () => {
+    const ctx = { waitUntil: () => {} };
+    const a = await createUpload(env, principal, request());
+    sqlite.prepare("UPDATE shares SET status='deleting' WHERE id=?").run(a.id);
+    expect((await worker.fetch(new Request(a.linkURL), env, ctx)).status).toBe(
+      410,
+    );
+    expect((await getShare(env, a.id, "owner")).status).toBe("deleting");
+    const b = await createUpload(
+      env,
+      principal,
+      request("request_00000000002"),
+    );
+    sqlite
+      .prepare("UPDATE shares SET session_expires_at=0 WHERE id=?")
+      .run(b.id);
+    expect((await worker.fetch(new Request(b.linkURL), env, ctx)).status).toBe(
+      410,
+    );
+    expect(
+      (await envelope(env, await getShare(env, b.id, "owner"))).linkURL,
+    ).toBeNull();
   });
   it("backs off failed physical deletes without losing the tombstone or logical quota", async () => {
     const upload = await createUpload(env, principal, request(undefined, 5)),

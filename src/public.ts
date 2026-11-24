@@ -3,10 +3,13 @@ import { getFiles, rateLimit } from "./store";
 import { now, type Env, type Share } from "./types";
 export { page } from "./recipient";
 import { recipientPage } from "./recipient";
+import { isPreviewCandidate, previewMime } from "./image-preview";
 export async function publicShare(env: Env, shareToken: string) {
   const share = await env.DB.prepare(
     `SELECT shares.* FROM shares JOIN accounts ON accounts.id=shares.account_id
-  WHERE token=?1 AND accounts.status='active' AND shares.status='ready' AND shares.expires_at>?2`,
+  WHERE token=?1 AND accounts.status='active' AND (
+    (shares.status='ready' AND shares.expires_at>?2)
+    OR (shares.status='uploading' AND shares.session_expires_at>?2))`,
   )
     .bind(shareToken, now())
     .first<Share>();
@@ -18,16 +21,20 @@ export async function download(
   env: Env,
   share: Share,
   fileId: string,
+  inlineImage = false,
 ) {
   const f = (await getFiles(env, share.id)).find(
     (f) => f.id === fileId && f.status === "ready",
   );
   if (!f) throw new HTTPError(404, "not_found");
+  const mime = inlineImage ? await previewMime(env, f) : null;
+  if (inlineImage && !mime)
+    throw new HTTPError(415, "image_preview_unavailable");
   const h = new Headers({
     ...headers,
-    "Content-Type": "application/octet-stream",
+    "Content-Type": mime ?? "application/octet-stream",
     "Accept-Ranges": "bytes",
-    "Content-Disposition": `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(f.name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+    "Content-Disposition": `${inlineImage ? "inline" : "attachment"}; filename="${inlineImage ? "image" : "download"}"; filename*=UTF-8''${encodeURIComponent(f.name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
   });
   const object = await env.BUCKET.head(f.object_key);
   if (!object) throw new HTTPError(410, "share_unavailable");
@@ -87,7 +94,22 @@ export async function download(
 export async function sharePage(env: Env, share: Share, language = "en") {
   const files = await getFiles(env, share.id);
   const locale = language.trim().toLowerCase().startsWith("vi") ? "vi" : "en";
-  const response = html(recipientPage(share, files, locale));
+  const candidate = files.find(
+    (file) => file.status === "ready" && isPreviewCandidate(file.name),
+  );
+  let mime: string | null = null;
+  if (candidate) {
+    try {
+      mime = await previewMime(env, candidate);
+    } catch {
+      /* A preview probe must not prevent access to the download page. */
+    }
+  }
+  const preview =
+    candidate && mime
+      ? { ...candidate, mime, origin: env.PUBLIC_ORIGIN }
+      : undefined;
+  const response = html(recipientPage(share, files, locale, preview));
   response.headers.set("Content-Language", locale);
   response.headers.set("Vary", "Accept-Language");
   return response;

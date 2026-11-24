@@ -80,6 +80,17 @@ distributed guessing. A link grants access to anyone who obtains it.
 The recipient page adapts to phone screens and the system light/dark appearance.
 It uses English or Vietnamese from the browser language, presents file types and
 UTC expiry clearly, and works without JavaScript or external fonts.
+PNG, JPEG, GIF and WebP images display directly on the page and expose Open Graph
+image metadata for link previews. Long screenshots scroll within the viewer.
+Redeploy the updated Worker to enable this on an existing personal connection;
+no database migration is needed for image previews.
+
+MFinder 2.2.173 and later hand out the link while the files are still uploading.
+Until the upload finishes, the page says the sender is still uploading, lists the
+files that are ready and refreshes every 30 seconds; only finished files can be
+downloaded, and a cancelled or expired upload answers 410. Redeploy the updated
+Worker to enable this; no database migration is needed. An older Worker keeps
+working and gives the link when the upload finishes.
 
 ## Maintain your deployment
 

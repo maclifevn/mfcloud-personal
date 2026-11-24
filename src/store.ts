@@ -80,6 +80,13 @@ export async function getFiles(env: Env, shareId: string) {
       .all<FileRecord>()
   ).results;
 }
+/// The link exists from creation: recipients may open it while files arrive.
+export function isLive(share: Share, timestamp = now()) {
+  return (
+    (share.status === "uploading" && share.session_expires_at > timestamp) ||
+    (share.status === "ready" && (share.expires_at ?? 0) > timestamp)
+  );
+}
 export async function envelope(env: Env, share: Share) {
   const fileRows = await getFiles(env, share.id);
   return {
@@ -94,6 +101,9 @@ export async function envelope(env: Env, share: Share) {
       share.status === "ready" && (share.expires_at ?? 0) > now()
         ? `${env.PUBLIC_ORIGIN}/${share.token}`
         : null,
+    // shareURL keeps meaning "published" for older apps; linkURL is the same
+    // address, handed out while the upload is still running.
+    linkURL: isLive(share) ? `${env.PUBLIC_ORIGIN}/${share.token}` : null,
     files: fileRows.map((f) => ({
       id: f.id,
       position: f.position,

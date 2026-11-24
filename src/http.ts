@@ -13,7 +13,7 @@ export const headers = {
   "X-Frame-Options": "DENY",
   "Strict-Transport-Security": "max-age=31536000",
   "Content-Security-Policy":
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
 };
 export function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), {

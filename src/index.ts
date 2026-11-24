@@ -1,15 +1,7 @@
+import { admin } from "./admin";
 import { authenticate, checkUploadAccess } from "./auth";
 import { cleanup } from "./cleanup";
-import {
-  escape,
-  html,
-  HTTPError,
-  json,
-  readJSON,
-  readBody,
-  text,
-  token,
-} from "./http";
+import { escape, html, HTTPError, json, readJSON, readBody } from "./http";
 import {
   accountUsage,
   createUpload,
@@ -24,68 +16,6 @@ import {
 import { completeFile, signParts, listUploadedParts } from "./storage";
 import { download, page, publicShare, report, sharePage } from "./public";
 import { limits, now, TTL_VALUES, type Env, type Share } from "./types";
-async function admin(request: Request, env: Env, ctx: ExecutionContext) {
-  const access = (
-    ctx as unknown as {
-      access?: { getIdentity: () => Promise<{ email?: string }> };
-    }
-  ).access;
-  const identity = await access?.getIdentity(),
-    email = identity?.email?.trim().toLowerCase();
-  if (
-    !email ||
-    !env.ADMIN_EMAILS?.split(",")
-      .map((s) => s.trim().toLowerCase())
-      .includes(email)
-  )
-    throw new HTTPError(403, "admin_required");
-  const path = new URL(request.url).pathname;
-  if (request.method === "POST") {
-    if (request.headers.get("origin") !== env.ADMIN_ORIGIN)
-      throw new HTTPError(403, "origin_mismatch");
-    const body = await readJSON(request),
-      id = text(body.id, 200);
-    if (path === "/admin/block-account") {
-      await env.DB.batch([
-        env.DB.prepare("UPDATE accounts SET status='blocked' WHERE id=?1").bind(
-          id,
-        ),
-        env.DB.prepare(
-          "UPDATE shares SET status='deleting',delete_after=?2 WHERE account_id=?1 AND status IN ('ready','uploading')",
-        ).bind(id, now() + 1200),
-      ]);
-    } else if (path === "/admin/delete-share") {
-      const share = await env.DB.prepare("SELECT * FROM shares WHERE id=?1")
-        .bind(id)
-        .first<Share>();
-      if (!share) throw new HTTPError(404, "not_found");
-      await deleteShare(env, share);
-    } else throw new HTTPError(404, "not_found");
-    await env.DB.prepare(
-      "INSERT INTO admin_events(id,actor,action,target_id,created_at) VALUES(?1,?2,?3,?4,?5)",
-    )
-      .bind(token(), email, path, id, now())
-      .run();
-    return json({ ok: true });
-  }
-  if (request.method !== "GET") throw new HTTPError(405, "method_not_allowed");
-  const reports = (
-    await env.DB.prepare(
-      "SELECT * FROM reports ORDER BY created_at DESC LIMIT 100",
-    ).all()
-  ).results;
-  const stats = await env.DB.prepare(
-    "SELECT COUNT(*) AS pendingDeletes,COALESCE(SUM(bytes),0) AS pendingDeleteBytes FROM shares WHERE status='deleting'",
-  ).first();
-  return json({
-    reports,
-    stats,
-    actions: [
-      "POST /admin/block-account {id}",
-      "POST /admin/delete-share {id}",
-    ],
-  });
-}
 async function route(request: Request, env: Env, ctx: ExecutionContext) {
   const url = new URL(request.url),
     path = url.pathname;
@@ -102,6 +32,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext) {
     return json({
       protocolVersion: 1,
       provider: env.MODE,
+      earlyLinks: true,
       uploadsEnabled: env.UPLOADS_ENABLED === "true",
       expirations: TTL_VALUES,
       ...limits(env),
@@ -109,7 +40,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext) {
   if (path === "/api/v1/reports" && request.method === "POST")
     return report(request, env, await readJSON(request));
   const publicMatch = path.match(
-    /^\/([A-Za-z0-9]{6})(?:\/(files\/([a-f0-9-]{36})|report))?$/,
+    /^\/([A-Za-z0-9]{6})(?:\/(files\/([a-f0-9-]{36})(\/preview)?|report))?$/,
   );
   if (publicMatch) {
     const shareToken = publicMatch[1]!;
@@ -152,7 +83,8 @@ async function route(request: Request, env: Env, ctx: ExecutionContext) {
     }
     if (!["GET", "HEAD"].includes(request.method))
       throw new HTTPError(405, "method_not_allowed");
-    if (publicMatch[3]) return download(request, env, share, publicMatch[3]);
+    if (publicMatch[3])
+      return download(request, env, share, publicMatch[3], !!publicMatch[4]);
     const response = await sharePage(
       env,
       share,
@@ -299,15 +231,17 @@ export default {
           }),
         );
       }
-      response = new URL(request.url).pathname.startsWith("/api/")
-        ? json({ error: code, requestId }, status)
-        : html(
-            page(
-              "Unavailable",
-              `<h1>This link is unavailable</h1><p>${escape(code)}</p>`,
-            ),
-            status,
-          );
+      response =
+        new URL(request.url).pathname.startsWith("/api/") ||
+        new URL(request.url).origin === env.ADMIN_ORIGIN
+          ? json({ error: code, requestId }, status)
+          : html(
+              page(
+                "Unavailable",
+                `<h1>This link is unavailable</h1><p>${escape(code)}</p>`,
+              ),
+              status,
+            );
     }
     response.headers.set("X-Request-ID", requestId);
     console.log(
